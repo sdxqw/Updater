@@ -1,7 +1,7 @@
 # Updater
 Simple Updater
 
-#Usage
+# Usage
 ```java
 new Updater("https://raw.githubusercontent.com/sdxqw/sdxqw/main/version.txt", "1.0").check((newVersion, currentVersion) -> {
   if (newVersion.equals(currentVersion))
