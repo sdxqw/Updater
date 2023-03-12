@@ -1,51 +1,82 @@
 package io.github.sdxqw.updater;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLConnection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-@Getter
+@Getter(AccessLevel.MODULE)
 public class Updater {
     private final String version;
     private final String url;
     private final Logger logger = Logger.getLogger(Updater.class.getName());
+    private final ExecutorService executor = Executors.newFixedThreadPool(1);
 
-    /**
-     * Constructor to create an Updater object with a version and a URL
-     *
-     * @param url     the URL of the version file
-     * @param version the current version of the software
-     */
     public Updater(String url, String version) {
         this.url = url;
         this.version = version;
     }
 
-    /**
-     * Method to check for updates
-     *
-     * @param version a BiConsumer to handle the result of the check
-     *                        The first parameter is the latest version available, and the second parameter is the current version.
-     *                        If the software is up-to-date, both parameters will be equal.
-     */
-    public void check(BiConsumer<String, String> version) {
+    public CompletableFuture<String> check() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                URL url = new URL(this.url);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                String versionFromUrl = in.readLine();
+                if (versionFromUrl.compareTo(version) > 0 && !versionFromUrl.equals(version)) {
+                    return versionFromUrl;
+                } else {
+                    return null;
+                }
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "Error while checking for updates: " + e.getMessage());
+                throw new UpdaterException("Error while checking for updates", e);
+            }
+        }, executor);
+    }
+
+    public void check(BiConsumer<String, String> versionConsumer) {
+        check().thenAcceptAsync(newVersion -> {
+            if (newVersion != null) {
+                versionConsumer.accept(newVersion, version);
+            } else {
+                versionConsumer.accept(version, version);
+            }
+        }, executor).exceptionally(ex -> {
+            logger.log(Level.SEVERE, "Error while checking for updates: " + ex.getMessage());
+            return null;
+        });
+    }
+
+    public void shutdown() {
+        executor.shutdown();
         try {
-            URL url = new URL(this.url);
-            URLConnection conn = url.openConnection();
-            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            String versionFromUrl = in.readLine();
-            if (versionFromUrl.compareTo(this.version) > 0 && !versionFromUrl.equals(this.version))
-                version.accept(versionFromUrl, this.version);
-            else
-                version.accept(this.version, this.version);
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Error while checking for updates: " + e.getMessage());
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            logger.log(Level.SEVERE, "Error while shutting down executor: " + e.getMessage());
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public static class UpdaterException extends RuntimeException {
+        public UpdaterException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 }
